@@ -28,14 +28,15 @@ def main():
         if not ret:
             break
 
-        detections = detector.detect(frame)
+        tracked_objects = detector.detect_and_track(frame)
 
-        for det in detections:
-            x1, y1, x2, y2 = det["bbox"]
-            cls_id = det["class_id"]
-            conf = det["confidence"]
+        for obj in tracked_objects:
+            x1, y1, x2, y2 = obj["bbox"]
+            track_id = obj["track_id"]
+            cls_id = obj["class_id"]
 
-            label = f"{cls_id} {conf:.2f}"
+            label = f"ID {track_id} | CLS {cls_id}"
+
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
                 frame,
