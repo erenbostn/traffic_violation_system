@@ -32,9 +32,19 @@ ENV/
 Thumbs.db
 
 # Project data & outputs (usually large/generated)
-data/
 outputs/
+outputs/**
+
+# Data (keep docs, ignore large files)
+data/videos/
+data/videos/**
 
 # Media
 *.mp4
 *.avi
+*.mov
+*.mkv
+
+# Editor / IDE
+.vscode/
+.idea/
