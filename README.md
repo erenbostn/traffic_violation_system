@@ -1,5 +1,8 @@
 # Traffic Violation System (Computer Vision)
 
+[![CI](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml/badge.svg)](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 Python tabanlı, video üzerinden trafik ihlali tespiti yapan bir bilgisayarlı görü projesi. Araç tespiti + takip ve trafik ışığı durumunu birleştirerek ihlalleri yakalar; her ihlal için “kanıt paketi” (kısa klip + `meta.json`) üretir.
 
 > English summary: A Python computer-vision project that detects traffic violations from video by combining vehicle detection/tracking with traffic-light state, and exports evidence clips + metadata.
