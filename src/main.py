@@ -1,6 +1,8 @@
 import cv2
 import time
 import csv
+from collections import deque
+from pathlib import Path
 from detector import VehicleDetector
 from traffic_light import TrafficLightDetector
 
@@ -9,6 +11,14 @@ MODEL_PATH = "models/vehicle_model.pt"
 OUTPUT_PATH = "outputs/annotated_video3.mp4"
 
 CLASS_NAMES = {0: "bus", 1: "car", 2: "motorcycle", 3: "truck"}
+VALID_VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"]
+TRACK_ID_TO_VEHICLE_TYPE = {}
+CLIP_PRE_FRAMES = 10
+CLIP_POST_FRAMES = 10
+FRAME_BUFFER_SIZE = CLIP_PRE_FRAMES
+FRAME_BUFFER = deque(maxlen=FRAME_BUFFER_SIZE)
+SOURCE_FPS = None
+CLIPS_DIR = Path("outputs") / "clips"
 
 
 # -------------------------------------------------
@@ -18,13 +28,35 @@ def point_side(p, a, b):
     return (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])
 
 
+def write_clip(frames, output_path, fps, frame_size):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        frame_size,
+    )
+    if not writer.isOpened():
+        return False
+
+    for img in frames:
+        writer.write(img)
+
+    writer.release()
+    return True
+
+
 def main():
+    global SOURCE_FPS
+
     cap = cv2.VideoCapture(VIDEO_PATH)
     assert cap.isOpened(), "Video açılamadı"
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    SOURCE_FPS = fps
 
     writer = cv2.VideoWriter(
         OUTPUT_PATH,
@@ -98,18 +130,61 @@ def main():
     # track_id -> previous line side
     vehicle_states = {}
     violations = set()
+    pending_clips = {}
 
     csv_file = open("outputs/violations.csv", "w", newline="")
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["track_id", "class", "violation"])
+    csv_writer.writerow(
+        [
+            "track_id",
+            "class",
+            "violation",
+            "vehicle_type",
+            "violation_type",
+            "evidence_path",
+        ]
+    )
 
     prev_time = time.time()
+    frame_index = 0
 
     # ==================================================
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
+        current_frame_index = frame_index
+        timestamp = time.time()
+        frame_for_evidence = frame.copy()
+
+        for pending_track_id, state in list(pending_clips.items()):
+            if current_frame_index <= state["violation_frame_index"]:
+                continue
+
+            if state["remaining_post_frames"] > 0:
+                state["post_frames"].append(frame_for_evidence)
+                state["remaining_post_frames"] -= 1
+
+            if state["remaining_post_frames"] == 0:
+                clip_frames = state["pre_frames"] + state["post_frames"]
+                clip_path = state["clip_path"]
+                clip_written = write_clip(
+                    clip_frames, clip_path, SOURCE_FPS, (width, height)
+                )
+
+                evidence_path = str(clip_path) if clip_written else ""
+                csv_writer.writerow(
+                    [
+                        pending_track_id,
+                        state["vehicle_type"],
+                        state["violation_type"],
+                        state["vehicle_type"],
+                        state["violation_type"],
+                        evidence_path,
+                    ]
+                )
+                del pending_clips[pending_track_id]
 
         light_state = traffic_light.get_light_state(frame)
         tracked_objects = detector.detect_and_track(frame)
@@ -119,7 +194,17 @@ def main():
             track_id = obj["track_id"]
             cls_id = obj["class_id"]
 
-            class_name = CLASS_NAMES.get(cls_id, "unknown")
+            yolo_class_name = CLASS_NAMES.get(cls_id)
+
+            vehicle_type = TRACK_ID_TO_VEHICLE_TYPE.get(track_id)
+            if vehicle_type is None:
+                if (
+                    yolo_class_name is None
+                    or yolo_class_name not in VALID_VEHICLE_CLASSES
+                ):
+                    continue
+                TRACK_ID_TO_VEHICLE_TYPE[track_id] = yolo_class_name
+                vehicle_type = yolo_class_name
 
             # ------------------------------------------
             # VEHICLE FRONT POINT (ALT ORTA NOKTA)
@@ -145,7 +230,23 @@ def main():
                 and track_id not in violations
             ):
                 violations.add(track_id)
-                csv_writer.writerow([track_id, class_name, "RED_LIGHT"])
+
+                clip_path = (
+                    CLIPS_DIR
+                    / f"track_{track_id}_red_light_frame_{current_frame_index}.mp4"
+                )
+                pre_frames = [item["image"] for item in FRAME_BUFFER] + [
+                    frame_for_evidence
+                ]
+                pending_clips[track_id] = {
+                    "vehicle_type": vehicle_type,
+                    "violation_type": "RED_LIGHT",
+                    "violation_frame_index": current_frame_index,
+                    "pre_frames": pre_frames,
+                    "post_frames": [],
+                    "remaining_post_frames": CLIP_POST_FRAMES,
+                    "clip_path": clip_path,
+                }
 
             vehicle_states[track_id] = current_side
 
@@ -153,10 +254,10 @@ def main():
             # DRAW VEHICLE
             # ------------------------------------------
             if track_id in violations:
-                label = f"ID {track_id} | {class_name} | RED LIGHT VIOLATION"
+                label = f"ID {track_id} | {vehicle_type} | RED LIGHT VIOLATION"
                 color = (0, 0, 255)
             else:
-                label = f"ID {track_id} | {class_name}"
+                label = f"ID {track_id} | {vehicle_type}"
                 color = (0, 255, 0)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -217,6 +318,33 @@ def main():
 
         if cv2.waitKey(1) & 0xFF == 27:
             break
+
+        FRAME_BUFFER.append(
+            {
+                "image": frame_for_evidence,
+                "frame_index": current_frame_index,
+                "timestamp": timestamp,
+            }
+        )
+        frame_index += 1
+
+    for pending_track_id, state in list(pending_clips.items()):
+        clip_frames = state["pre_frames"] + state["post_frames"]
+        clip_path = state["clip_path"]
+        clip_written = write_clip(clip_frames, clip_path, SOURCE_FPS, (width, height))
+
+        evidence_path = str(clip_path) if clip_written else ""
+        csv_writer.writerow(
+            [
+                pending_track_id,
+                state["vehicle_type"],
+                state["violation_type"],
+                state["vehicle_type"],
+                state["violation_type"],
+                evidence_path,
+            ]
+        )
+        del pending_clips[pending_track_id]
 
     cap.release()
     writer.release()
