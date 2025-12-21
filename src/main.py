@@ -7,19 +7,19 @@ import json
 from detector import VehicleDetector
 from traffic_light import TrafficLightDetector
 
-VIDEO_PATH = "data/videos/input3.mp4"
+VIDEO_PATH = "data/videos/input2.mp4"
 MODEL_PATH = "models/vehicle_model.pt"
 OUTPUT_PATH = "outputs/annotated_video3.mp4"
 
 CLASS_NAMES = {0: "bus", 1: "car", 2: "motorcycle", 3: "truck"}
 VALID_VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"]
 TRACK_ID_TO_VEHICLE_TYPE = {}
-CLIP_PRE_FRAMES = 15
-CLIP_POST_FRAMES = 15
+CLIP_PRE_FRAMES = 10
+CLIP_POST_FRAMES = 10
 FRAME_BUFFER_SIZE = CLIP_PRE_FRAMES
 FRAME_BUFFER = deque(maxlen=FRAME_BUFFER_SIZE)
 SOURCE_FPS = None
-CLIPS_DIR = Path("outputs") / "clips"
+EVIDENCE_DIR = Path("outputs") / "evidence"
 
 
 # -------------------------------------------------
@@ -61,6 +61,21 @@ def write_meta_json(meta_path, meta):
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def next_violation_id(evidence_dir):
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    max_id = 0
+    for p in evidence_dir.glob("violation_*"):
+        if not p.is_dir():
+            continue
+        suffix = p.name.replace("violation_", "", 1)
+        if not suffix.isdigit():
+            continue
+        max_id = max(max_id, int(suffix))
+
+    return max_id + 1
 
 
 def draw_violation_overlay(
@@ -190,6 +205,7 @@ def main():
     violations = set()
     violation_snapshots = {}
     pending_clips = {}
+    violation_id_counter = next_violation_id(EVIDENCE_DIR)
 
     csv_file = open("outputs/violations.csv", "w", newline="")
     csv_writer = csv.writer(csv_file)
@@ -318,15 +334,17 @@ def main():
 
         for trigger in violations_triggered:
             track_id = trigger["track_id"]
-            clip_path = (
-                CLIPS_DIR
-                / f"track_{track_id}_red_light_frame_{current_frame_index}.mp4"
-            )
-            meta_path = clip_path.with_suffix(".json")
+            violation_id = violation_id_counter
+            violation_id_counter += 1
+
+            violation_dir = EVIDENCE_DIR / f"violation_{violation_id:04d}"
+            clip_path = violation_dir / "clip.mp4"
+            meta_path = violation_dir / "meta.json"
             pre_frames = [clone_frame_item(item) for item in FRAME_BUFFER] + [
                 clone_frame_item(current_frame_item)
             ]
             pending_clips[track_id] = {
+                "violation_id": violation_id,
                 "vehicle_type": trigger["vehicle_type"],
                 "violation_type": trigger["violation_type"],
                 "violation_frame_index": trigger["frame_index"],
@@ -372,6 +390,7 @@ def main():
                 write_meta_json(
                     meta_path,
                     {
+                        "violation_id": state.get("violation_id"),
                         "track_id": pending_track_id,
                         "vehicle_type": state["vehicle_type"],
                         "violation_type": state["violation_type"],
@@ -472,6 +491,7 @@ def main():
         write_meta_json(
             meta_path,
             {
+                "violation_id": state.get("violation_id"),
                 "track_id": pending_track_id,
                 "vehicle_type": state["vehicle_type"],
                 "violation_type": state["violation_type"],
