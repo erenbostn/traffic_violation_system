@@ -3,6 +3,7 @@ import time
 import csv
 from collections import deque
 from pathlib import Path
+import json
 from detector import VehicleDetector
 from traffic_light import TrafficLightDetector
 
@@ -13,8 +14,8 @@ OUTPUT_PATH = "outputs/annotated_video3.mp4"
 CLASS_NAMES = {0: "bus", 1: "car", 2: "motorcycle", 3: "truck"}
 VALID_VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"]
 TRACK_ID_TO_VEHICLE_TYPE = {}
-CLIP_PRE_FRAMES = 10
-CLIP_POST_FRAMES = 10
+CLIP_PRE_FRAMES = 15
+CLIP_POST_FRAMES = 15
 FRAME_BUFFER_SIZE = CLIP_PRE_FRAMES
 FRAME_BUFFER = deque(maxlen=FRAME_BUFFER_SIZE)
 SOURCE_FPS = None
@@ -45,6 +46,63 @@ def write_clip(frames, output_path, fps, frame_size):
 
     writer.release()
     return True
+
+
+def clone_frame_item(frame_item):
+    return {
+        "image": frame_item["image"].copy(),
+        "frame_index": frame_item["frame_index"],
+        "timestamp": frame_item["timestamp"],
+        "tracks": dict(frame_item.get("tracks", {})),
+    }
+
+
+def write_meta_json(meta_path, meta):
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    with meta_path.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def draw_violation_overlay(
+    image,
+    *,
+    bbox,
+    track_id,
+    vehicle_type,
+    violation_type,
+    timestamp,
+    stop_line,
+):
+    (line_p1, line_p2) = stop_line
+
+    cv2.line(image, line_p1, line_p2, (0, 0, 255), 3)
+
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+    ts_text = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    violation_text = f"{violation_type.replace('_', ' ')} VIOLATION"
+    label_main = f"ID {track_id} | {vehicle_type} | {violation_text}"
+
+    cv2.putText(
+        image,
+        label_main,
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 0, 255),
+        2,
+    )
+    cv2.putText(
+        image,
+        f"Timestamp: {ts_text}",
+        (20, 75),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 0, 255),
+        2,
+    )
 
 
 def main():
@@ -130,6 +188,7 @@ def main():
     # track_id -> previous line side
     vehicle_states = {}
     violations = set()
+    violation_snapshots = {}
     pending_clips = {}
 
     csv_file = open("outputs/violations.csv", "w", newline="")
@@ -158,36 +217,10 @@ def main():
         timestamp = time.time()
         frame_for_evidence = frame.copy()
 
-        for pending_track_id, state in list(pending_clips.items()):
-            if current_frame_index <= state["violation_frame_index"]:
-                continue
-
-            if state["remaining_post_frames"] > 0:
-                state["post_frames"].append(frame_for_evidence)
-                state["remaining_post_frames"] -= 1
-
-            if state["remaining_post_frames"] == 0:
-                clip_frames = state["pre_frames"] + state["post_frames"]
-                clip_path = state["clip_path"]
-                clip_written = write_clip(
-                    clip_frames, clip_path, SOURCE_FPS, (width, height)
-                )
-
-                evidence_path = str(clip_path) if clip_written else ""
-                csv_writer.writerow(
-                    [
-                        pending_track_id,
-                        state["vehicle_type"],
-                        state["violation_type"],
-                        state["vehicle_type"],
-                        state["violation_type"],
-                        evidence_path,
-                    ]
-                )
-                del pending_clips[pending_track_id]
-
         light_state = traffic_light.get_light_state(frame)
         tracked_objects = detector.detect_and_track(frame)
+        frame_tracks = {}
+        violations_triggered = []
 
         for obj in tracked_objects:
             x1, y1, x2, y2 = obj["bbox"]
@@ -205,6 +238,8 @@ def main():
                     continue
                 TRACK_ID_TO_VEHICLE_TYPE[track_id] = yolo_class_name
                 vehicle_type = yolo_class_name
+
+            frame_tracks[track_id] = (x1, y1, x2, y2)
 
             # ------------------------------------------
             # VEHICLE FRONT POINT (ALT ORTA NOKTA)
@@ -230,23 +265,25 @@ def main():
                 and track_id not in violations
             ):
                 violations.add(track_id)
+                if track_id not in violation_snapshots:
+                    violation_snapshots[track_id] = {
+                        "track_id": track_id,
+                        "vehicle_type": vehicle_type,
+                        "violation_type": "RED_LIGHT",
+                        "frame_index": current_frame_index,
+                        "timestamp": timestamp,
+                    }
 
-                clip_path = (
-                    CLIPS_DIR
-                    / f"track_{track_id}_red_light_frame_{current_frame_index}.mp4"
+                violations_triggered.append(
+                    {
+                        "track_id": track_id,
+                        "vehicle_type": vehicle_type,
+                        "violation_type": "RED_LIGHT",
+                        "bbox": (x1, y1, x2, y2),
+                        "frame_index": current_frame_index,
+                        "timestamp": timestamp,
+                    }
                 )
-                pre_frames = [item["image"] for item in FRAME_BUFFER] + [
-                    frame_for_evidence
-                ]
-                pending_clips[track_id] = {
-                    "vehicle_type": vehicle_type,
-                    "violation_type": "RED_LIGHT",
-                    "violation_frame_index": current_frame_index,
-                    "pre_frames": pre_frames,
-                    "post_frames": [],
-                    "remaining_post_frames": CLIP_POST_FRAMES,
-                    "clip_path": clip_path,
-                }
 
             vehicle_states[track_id] = current_side
 
@@ -271,6 +308,93 @@ def main():
                 color,
                 2,
             )
+
+        current_frame_item = {
+            "image": frame_for_evidence,
+            "frame_index": current_frame_index,
+            "timestamp": timestamp,
+            "tracks": frame_tracks,
+        }
+
+        for trigger in violations_triggered:
+            track_id = trigger["track_id"]
+            clip_path = (
+                CLIPS_DIR
+                / f"track_{track_id}_red_light_frame_{current_frame_index}.mp4"
+            )
+            meta_path = clip_path.with_suffix(".json")
+            pre_frames = [clone_frame_item(item) for item in FRAME_BUFFER] + [
+                clone_frame_item(current_frame_item)
+            ]
+            pending_clips[track_id] = {
+                "vehicle_type": trigger["vehicle_type"],
+                "violation_type": trigger["violation_type"],
+                "violation_frame_index": trigger["frame_index"],
+                "violation_timestamp": trigger["timestamp"],
+                "clip_path": clip_path,
+                "meta_path": meta_path,
+                "pre_frames": pre_frames,
+                "post_frames": [],
+                "remaining_post_frames": CLIP_POST_FRAMES,
+            }
+
+        for pending_track_id, state in list(pending_clips.items()):
+            if current_frame_index <= state["violation_frame_index"]:
+                continue
+
+            if state["remaining_post_frames"] > 0:
+                state["post_frames"].append(clone_frame_item(current_frame_item))
+                state["remaining_post_frames"] -= 1
+
+            if state["remaining_post_frames"] == 0:
+                clip_items = state["pre_frames"] + state["post_frames"]
+                for item in clip_items:
+                    draw_violation_overlay(
+                        item["image"],
+                        bbox=item["tracks"].get(pending_track_id),
+                        track_id=pending_track_id,
+                        vehicle_type=state["vehicle_type"],
+                        violation_type=state["violation_type"],
+                        timestamp=item["timestamp"],
+                        stop_line=(line_p1, line_p2),
+                    )
+
+                clip_path = state["clip_path"]
+                meta_path = state["meta_path"]
+                clip_written = write_clip(
+                    [item["image"] for item in clip_items],
+                    clip_path,
+                    SOURCE_FPS,
+                    (width, height),
+                )
+
+                evidence_path = str(clip_path) if clip_written else ""
+                write_meta_json(
+                    meta_path,
+                    {
+                        "track_id": pending_track_id,
+                        "vehicle_type": state["vehicle_type"],
+                        "violation_type": state["violation_type"],
+                        "frame_index": state["violation_frame_index"],
+                        "timestamp": state["violation_timestamp"],
+                        "source_fps": SOURCE_FPS,
+                        "clip_pre_frames": CLIP_PRE_FRAMES,
+                        "clip_post_frames": CLIP_POST_FRAMES,
+                        "clip_total_frames": len(clip_items),
+                        "clip_path": evidence_path,
+                    },
+                )
+                csv_writer.writerow(
+                    [
+                        pending_track_id,
+                        state["vehicle_type"],
+                        state["violation_type"],
+                        state["vehicle_type"],
+                        state["violation_type"],
+                        evidence_path,
+                    ]
+                )
+                del pending_clips[pending_track_id]
 
         # ------------------------------------------
         # OVERLAYS
@@ -319,21 +443,47 @@ def main():
         if cv2.waitKey(1) & 0xFF == 27:
             break
 
-        FRAME_BUFFER.append(
-            {
-                "image": frame_for_evidence,
-                "frame_index": current_frame_index,
-                "timestamp": timestamp,
-            }
-        )
+        FRAME_BUFFER.append(current_frame_item)
         frame_index += 1
 
     for pending_track_id, state in list(pending_clips.items()):
-        clip_frames = state["pre_frames"] + state["post_frames"]
+        clip_items = state["pre_frames"] + state["post_frames"]
+        for item in clip_items:
+            draw_violation_overlay(
+                item["image"],
+                bbox=item["tracks"].get(pending_track_id),
+                track_id=pending_track_id,
+                vehicle_type=state["vehicle_type"],
+                violation_type=state["violation_type"],
+                timestamp=item["timestamp"],
+                stop_line=(line_p1, line_p2),
+            )
+
         clip_path = state["clip_path"]
-        clip_written = write_clip(clip_frames, clip_path, SOURCE_FPS, (width, height))
+        meta_path = state["meta_path"]
+        clip_written = write_clip(
+            [item["image"] for item in clip_items],
+            clip_path,
+            SOURCE_FPS,
+            (width, height),
+        )
 
         evidence_path = str(clip_path) if clip_written else ""
+        write_meta_json(
+            meta_path,
+            {
+                "track_id": pending_track_id,
+                "vehicle_type": state["vehicle_type"],
+                "violation_type": state["violation_type"],
+                "frame_index": state["violation_frame_index"],
+                "timestamp": state["violation_timestamp"],
+                "source_fps": SOURCE_FPS,
+                "clip_pre_frames": CLIP_PRE_FRAMES,
+                "clip_post_frames": CLIP_POST_FRAMES,
+                "clip_total_frames": len(clip_items),
+                "clip_path": evidence_path,
+            },
+        )
         csv_writer.writerow(
             [
                 pending_track_id,
