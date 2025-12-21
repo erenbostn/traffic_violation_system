@@ -10,10 +10,9 @@ Python tabanlı, video üzerinden trafik ihlali tespiti yapan bir bilgisayarlı 
 ## Özellikler
 
 - Araç tespiti ve takip (YOLO/Ultralytics + takip mantığı)
-- Trafik ışığı ROI üzerinden durum tespiti (kırmızı/yeşil)
+- Trafik ışığı ROI üzerinden durum tespiti (kırmızı/yeşil) (ROI başlangıçta seçilir)
 - İhlal anında kanıt üretimi: `outputs/evidence/violation_XXXX/clip.mp4` + `meta.json`
 - `outputs/violations.csv` ile ihlal log’u
-- ROI seçimi için yardımcı araç: `toolsselect_roi.py`
 
 ## Teknolojiler
 
@@ -25,7 +24,6 @@ Python tabanlı, video üzerinden trafik ihlali tespiti yapan bir bilgisayarlı 
 ## Proje Yapısı
 
 - `src/`: ana uygulama kodu (`main.py`, tespit/takip/kurallar)
-- `configs/`: konfigürasyonlar (ör. `roi.yaml`)
 - `models/`: model ağırlıkları (ör. `vehicle_model.pt`)
 - `data/`: örnek video/harici veri dizini (repoya dahil edilmez, detay: `data/README.md`)
 - `outputs/`: üretilen çıktılar (repoya dahil edilmez)
@@ -43,15 +41,7 @@ pip install -r requirements.txt
 
 1) Video dosyanızı `data/videos/` altına koyun (örn. `data/videos/input.mp4`).
 
-2) Trafik ışığı için ROI seçin:
-
-```bash
-python toolsselect_roi.py
-```
-
-Çıktıdaki `x1, y1, x2, y2` değerlerini `configs/roi.yaml` içine girin.
-
-3) Uygulamayı çalıştırın:
+2) Uygulamayı çalıştırın (başlangıçta trafik ışığı ROI ve stop-line interaktif seçilir):
 
 ```bash
 python src/main.py

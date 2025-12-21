@@ -13,7 +13,6 @@ pip install -r requirements.txt
 ## Running
 
 ```bash
-python toolsselect_roi.py
 python src/main.py
 ```
 
