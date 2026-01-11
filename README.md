@@ -1,5 +1,11 @@
 # Traffic Violation System (Computer Vision)
 
+<div align="center">
+  <video src="[https://github.com/kullanici-adi/repo-adi/assets/linkiniz.mp4](https://github.com/user-attachments/assets/3303ff31-3256-4629-b2ab-83e29a939124
+)" width="100%" controls autoplay muted loop>
+  </video>
+</div>
+
 [![CI](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml/badge.svg)](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
