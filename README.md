@@ -1,5 +1,12 @@
 # Traffic Violation System (Computer Vision)
 
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/ff5d2a10-ce2e-40f2-a753-9e867bd0bd02" width="100%" controls autoplay muted loop>
+    Tarayıcınız video etiketini desteklemiyor.
+  </video>
+</div>
+
+
 [![CI](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml/badge.svg)](https://github.com/erenbostn/traffic_violation_system/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
